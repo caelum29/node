@@ -1,222 +1,323 @@
-# Node.js Study Guide
+# Node.js Core Study Guide
 
-> A comprehensive guide for studying the Node.js API and ecosystem
-> Based on [Node.js Official Documentation](https://nodejs.org/api/)
+> Study material for learning Node.js core APIs through conceptual understanding and hands-on practice
 
 ## Table of Contents
 
-1. [Getting Started](#getting-started)
-2. [Core Fundamentals](#core-fundamentals)
-3. [Module Systems](#module-systems)
-4. [I/O & Networking](#io--networking)
-5. [System & Environment](#system--environment)
-6. [Async Programming](#async-programming)
-7. [Development & Debugging](#development--debugging)
-8. [Advanced Topics](#advanced-topics)
-9. [Learning Path](#learning-path)
+1. [Process & Globals](#process--globals)
+2. [Events](#events)
+3. [Buffers](#buffers)
+4. [Streams](#streams)
+5. [Modules](#modules)
+6. [File System](#file-system)
+7. [HTTP](#http)
+8. [Child Processes](#child-processes)
+9. [Event Loop & Async](#event-loop--async)
+10. [Learning Path](#learning-path)
 
 ---
 
-## Getting Started
+## Process & Globals
 
-### Prerequisites
-- Basic JavaScript knowledge
-- Understanding of asynchronous programming concepts
-- Familiarity with command line/terminal
+**Concept:** The `process` object is a global that provides info about the current Node.js process and control over it.
 
-### Installation & Setup
-```bash
-# Check Node.js version
-node --version
+```javascript
+// Environment and runtime info
+console.log(process.version);      // Node version
+console.log(process.platform);     // OS platform
+console.log(process.cwd());        // Current working directory
+console.log(process.argv);         // Command line arguments
 
-# Check npm version
-npm --version
+// Exit codes (0 = success, 1+ = error)
+process.exit(0);
 
-# Run a Node.js file
-node app.js
-
-# Start REPL (Read-Eval-Print Loop)
-node
+// Environment variables
+const port = process.env.PORT || 3000;
+const env = process.env.NODE_ENV || 'development';
 ```
 
+### Common Pitfalls
+- **Forgetting exit codes matter** - Always use `process.exit(1)` for errors, `process.exit(0)` for success
+- **Blocking the event loop** - Synchronous operations block everything; use async versions
+- **Not handling signals** - Process can receive SIGTERM, SIGINT - handle them gracefully
+- **Modifying `process.env` at runtime** - Changes don't persist; set before process starts
+
+### Practice Exercises
+1. Write a CLI that accepts `--name` and `--age` flags and prints them (parse `process.argv`)
+2. Create a script that reads `DATABASE_URL` from env vars and exits with code 1 if missing
+3. Handle SIGTERM signal to gracefully shutdown (close connections, cleanup, then exit)
+
+**Docs:** https://nodejs.org/api/process.html
+
 ---
 
-## Core Fundamentals
+## Events
 
-### 1. Process
-**Documentation:** https://nodejs.org/api/process.html
+**Concept:** Node.js uses an event-driven architecture. Objects that emit events are instances of `EventEmitter`.
 
-The `process` object provides information about and control over the current Node.js process.
-
-**Key Concepts:**
-- `process.argv` - Command line arguments
-- `process.env` - Environment variables
-- `process.cwd()` - Current working directory
-- `process.exit([code])` - Exit the process
-- `process.nextTick(callback)` - Defer execution
-
-**Study Points:**
-- Environment variable management
-- Process signals (SIGTERM, SIGINT)
-- Standard streams (stdin, stdout, stderr)
-- Process lifecycle and exit codes
-
-### 2. Events
-**Documentation:** https://nodejs.org/api/events.html
-
-Node.js uses an event-driven architecture where many objects emit events.
-
-**Key Concepts:**
 ```javascript
 const EventEmitter = require('events');
-class MyEmitter extends EventEmitter {}
 
-const myEmitter = new MyEmitter();
-myEmitter.on('event', () => console.log('Event fired!'));
-myEmitter.emit('event');
+class DatabaseConnection extends EventEmitter {
+  connect() {
+    // Simulate async connection
+    setTimeout(() => {
+      this.emit('connected', { host: 'localhost', port: 5432 });
+    }, 100);
+  }
+
+  query(sql) {
+    if (!this.connected) {
+      this.emit('error', new Error('Not connected'));
+      return;
+    }
+    this.emit('query', sql);
+  }
+}
+
+const db = new DatabaseConnection();
+
+// Listeners
+db.on('connected', (info) => console.log('Connected:', info));
+db.once('error', (err) => console.error('Error:', err)); // Fires only once
+db.on('query', (sql) => console.log('Query:', sql));
+
+db.connect();
 ```
 
-**Study Points:**
-- Creating custom EventEmitters
-- `on()`, `once()`, `emit()`, `removeListener()`
-- Error event handling
-- Event ordering and synchronous vs asynchronous
+### Event Execution Model
+- Events are **synchronous** - listeners execute in order, blocking
+- Use `setImmediate()` inside emitter if you need async behavior
+- `error` events are special - unhandled errors crash the process
 
-### 3. Buffer
-**Documentation:** https://nodejs.org/api/buffer.html
+### Common Pitfalls
+- **Memory leaks from listeners** - Always remove listeners you don't need (`removeListener()`)
+- **Not handling 'error' events** - Unhandled error events crash the process
+- **Order matters** - Listeners execute in registration order
+- **Synchronous execution** - Long-running listener blocks other listeners
 
-Buffers handle binary data directly in Node.js.
+### Practice Exercises
+1. Create a `FileWatcher` EventEmitter that emits `change`, `add`, `delete` events
+2. Implement max listener warning - emit warning if >10 listeners on same event
+3. Build a simple pub/sub system with subscribe/unsubscribe and publish methods
 
-**Key Concepts:**
+**Docs:** https://nodejs.org/api/events.html
+
+---
+
+## Buffers
+
+**Concept:** Buffers represent fixed-size chunks of memory for binary data. They exist outside V8's heap.
+
 ```javascript
 // Creating buffers
-const buf1 = Buffer.from('hello world');
-const buf2 = Buffer.alloc(10);
-const buf3 = Buffer.allocUnsafe(10);
+const buf1 = Buffer.alloc(10);              // Safe, zero-filled
+const buf2 = Buffer.allocUnsafe(10);        // Fast, uninitialized
+const buf3 = Buffer.from('hello');          // From string
+const buf4 = Buffer.from([0x68, 0x65]);     // From array
 
-// Working with buffers
-buf1.toString(); // Convert to string
-buf1.length;     // Get length
+// Reading/writing
+buf1.write('hello', 0, 'utf8');
+console.log(buf1.toString('utf8'));
+console.log(buf1.toString('hex'));
+console.log(buf1.toString('base64'));
+
+// Slicing (creates view, not copy)
+const slice = buf3.slice(0, 2);
+slice[0] = 0x48; // Modifies original buffer!
+
+// Copying (creates new buffer)
+const copy = Buffer.from(buf3);
 ```
 
-**Study Points:**
-- Buffer vs String encoding (utf8, base64, hex)
-- Buffer pooling and memory management
-- TypedArrays and ArrayBuffer relationship
-- Performance considerations
+### Understanding Buffer Memory
+- Buffers are **fixed size** - cannot be resized
+- `allocUnsafe` is faster but contains old memory - **must initialize before use**
+- Slices share memory with parent - modifying slice modifies original
+- Buffers use UTF-8 by default
 
-### 4. Streams
-**Documentation:** https://nodejs.org/api/stream.html
+### Common Pitfalls
+- **Using `allocUnsafe` without initializing** - exposes old memory data (security risk)
+- **Thinking slices are copies** - they're views; modifications affect original
+- **String encoding assumptions** - always specify encoding explicitly
+- **Modifying buffer length** - buffers are fixed size, length cannot change
 
-Streams are collections of data that might not be available all at once.
+### Practice Exercises
+1. Write function to convert hex string to Buffer and back
+2. Implement a function that XORs two buffers of same length
+3. Create a buffer pool manager that reuses buffers to reduce allocations
 
-**Types of Streams:**
-- **Readable** - Read data (e.g., `fs.createReadStream()`)
-- **Writable** - Write data (e.g., `fs.createWriteStream()`)
-- **Duplex** - Both readable and writable (e.g., `net.Socket`)
-- **Transform** - Modify data while reading/writing (e.g., `zlib.createGzip()`)
+**Docs:** https://nodejs.org/api/buffer.html
 
-**Key Concepts:**
+---
+
+## Streams
+
+**Concept:** Streams process data piece-by-piece instead of loading everything into memory.
+
+### Four Types of Streams
+1. **Readable** - Read data (e.g., `fs.createReadStream()`)
+2. **Writable** - Write data (e.g., `fs.createWriteStream()`)
+3. **Duplex** - Both readable and writable (e.g., TCP socket)
+4. **Transform** - Modify data while reading/writing (e.g., compression)
+
 ```javascript
 const fs = require('fs');
+const { Transform } = require('stream');
 
-// Pipe data from one stream to another
-const readStream = fs.createReadStream('input.txt');
-const writeStream = fs.createWriteStream('output.txt');
-readStream.pipe(writeStream);
+// Basic piping
+fs.createReadStream('input.txt')
+  .pipe(fs.createWriteStream('output.txt'));
 
-// Handle events
-readStream.on('data', (chunk) => console.log(chunk));
-readStream.on('end', () => console.log('Done'));
-readStream.on('error', (err) => console.error(err));
+// Transform stream
+const uppercase = new Transform({
+  transform(chunk, encoding, callback) {
+    this.push(chunk.toString().toUpperCase());
+    callback();
+  }
+});
+
+fs.createReadStream('input.txt')
+  .pipe(uppercase)
+  .pipe(process.stdout);
+
+// Manual stream handling
+const readable = fs.createReadStream('large-file.txt');
+
+readable.on('data', (chunk) => {
+  console.log(`Received ${chunk.length} bytes`);
+});
+
+readable.on('end', () => {
+  console.log('No more data');
+});
+
+readable.on('error', (err) => {
+  console.error('Error:', err);
+});
 ```
 
-**Study Points:**
-- Backpressure and flow control
-- Object mode vs binary mode
-- Pipeline and error handling
-- Stream performance benefits
+### Backpressure
+When writable stream can't handle data fast enough, it returns `false` from `write()`:
 
-### 5. Utilities
-**Documentation:** https://nodejs.org/api/util.html
+```javascript
+const readable = fs.createReadStream('input.txt');
+const writable = fs.createWriteStream('output.txt');
 
-Utility functions for common programming tasks.
+readable.on('data', (chunk) => {
+  const canContinue = writable.write(chunk);
+  if (!canContinue) {
+    readable.pause(); // Stop reading
+  }
+});
 
-**Key Functions:**
-- `util.promisify()` - Convert callback-based functions to promises
-- `util.inspect()` - Debug object representation
-- `util.types` - Type checking utilities
-- `util.format()` - String formatting
+writable.on('drain', () => {
+  readable.resume(); // Continue reading
+});
+```
+
+### Common Pitfalls
+- **Ignoring backpressure** - causes memory issues; always use `.pipe()` or handle `drain`
+- **Not handling errors** - streams don't forward errors through pipes
+- **Memory leaks from paused streams** - always resume or destroy paused streams
+- **Assuming pipe() handles errors** - it doesn't; attach error handlers to each stream
+
+### Practice Exercises
+1. Implement a Transform stream that counts words in flowing text
+2. Create a Duplex stream that echoes input back with 1 second delay
+3. Build a stream multiplexer that writes to multiple destinations with backpressure handling
+
+**Docs:** https://nodejs.org/api/stream.html
 
 ---
 
-## Module Systems
+## Modules
 
-### 1. CommonJS Modules
-**Documentation:** https://nodejs.org/api/modules.html
+### CommonJS (Traditional)
 
-The traditional Node.js module system.
+**Concept:** Each file is a module. `require()` loads modules synchronously and caches them.
 
-**Key Concepts:**
 ```javascript
-// Exporting
-module.exports = function() { /* ... */ };
-exports.myFunction = function() { /* ... */ };
+// math.js
+const add = (a, b) => a + b;
+const multiply = (a, b) => a * b;
 
-// Importing
-const myModule = require('./myModule');
-const { myFunction } = require('./myModule');
+// Wrong way
+exports = { add, multiply }; // Doesn't work!
+
+// Correct ways
+module.exports = { add, multiply };
+// OR
+exports.add = add;
+exports.multiply = multiply;
 ```
 
-**Study Points:**
-- `require()` caching mechanism
-- Circular dependencies
-- Module resolution algorithm
-- `module.exports` vs `exports`
-
-### 2. ES Modules (ESM)
-**Documentation:** https://nodejs.org/api/esm.html
-
-Modern JavaScript module system.
-
-**Key Concepts:**
+**Module Resolution:**
 ```javascript
-// Exporting
-export function myFunction() { /* ... */ }
-export default class MyClass { /* ... */ }
-
-// Importing
-import { myFunction } from './myModule.mjs';
-import MyClass from './myModule.mjs';
+require('./math');        // Relative path - loads ./math.js
+require('lodash');        // node_modules lookup
+require('path');          // Core module
 ```
 
-**Study Points:**
-- File extensions (.mjs, .cjs, .js)
-- Package.json "type" field
-- Top-level await
-- Interoperability with CommonJS
-- Dynamic imports
+### ES Modules (Modern)
 
-### 3. Packages
-**Documentation:** https://nodejs.org/api/packages.html
+**Concept:** Modern module system with static imports analyzed at parse time.
 
-**Study Points:**
-- package.json structure and fields
-- Conditional exports
-- Dual package hazards
-- Package entry points
-- Semver versioning
+```javascript
+// math.mjs
+export const add = (a, b) => a + b;
+export const multiply = (a, b) => a * b;
+export default class Calculator {}
+
+// app.mjs
+import Calculator, { add, multiply } from './math.mjs';
+import * as math from './math.mjs';
+
+// Dynamic import
+const module = await import('./math.mjs');
+```
+
+**Enabling ESM:**
+- Use `.mjs` extension, OR
+- Add `"type": "module"` in package.json
+
+### Module Caching
+
+```javascript
+// counter.js
+let count = 0;
+module.exports = {
+  increment: () => ++count,
+  get: () => count
+};
+
+// Modules are cached - same instance everywhere
+const counter1 = require('./counter');
+const counter2 = require('./counter');
+counter1.increment();
+console.log(counter2.get()); // 1 - same instance!
+```
+
+### Common Pitfalls
+- **`exports` vs `module.exports`** - `exports` is just a reference; reassigning breaks it
+- **Circular dependencies** - can result in incomplete module exports
+- **Forgetting `.mjs` or package.json type** - ESM won't work
+- **Mixing CommonJS and ESM** - ESM can import CommonJS, but not vice versa directly
+- **Assuming fresh module each require** - modules are cached
+
+### Practice Exercises
+1. Demonstrate circular dependency issue and fix it with refactoring
+2. Create a module that returns different instances vs singleton pattern
+3. Build a simple plugin loader that dynamically requires modules from a directory
+
+**Docs:** https://nodejs.org/api/modules.html | https://nodejs.org/api/esm.html
 
 ---
 
-## I/O & Networking
+## File System
 
-### 1. File System (fs)
-**Documentation:** https://nodejs.org/api/fs.html
+**Concept:** Three API styles: callback, promise, and synchronous.
 
-File system operations for reading, writing, and managing files.
-
-**Key Concepts:**
 ```javascript
 const fs = require('fs');
 const fsPromises = require('fs/promises');
@@ -227,666 +328,378 @@ fs.readFile('file.txt', 'utf8', (err, data) => {
   console.log(data);
 });
 
-// Promise style
+// Promise style (preferred for async/await)
 async function readFile() {
-  const data = await fsPromises.readFile('file.txt', 'utf8');
-  console.log(data);
+  try {
+    const data = await fsPromises.readFile('file.txt', 'utf8');
+    console.log(data);
+  } catch (err) {
+    console.error(err);
+  }
 }
 
-// Synchronous
+// Sync style (blocks event loop - use sparingly)
 const data = fs.readFileSync('file.txt', 'utf8');
 ```
 
-**Study Points:**
-- Async vs sync operations
-- File descriptors and low-level operations
-- Directory operations (mkdir, readdir, rmdir)
-- File stats and permissions
-- Watch files for changes
-- Working with file streams
-
-### 2. Path
-**Documentation:** https://nodejs.org/api/path.html
-
-Utilities for working with file and directory paths.
-
-**Key Functions:**
+### File Descriptors (Low-level)
 ```javascript
-const path = require('path');
+// Open file descriptor
+const fd = fs.openSync('file.txt', 'r');
+const buffer = Buffer.alloc(100);
 
-path.join('/foo', 'bar', 'baz');      // Join path segments
-path.resolve('foo', 'bar');            // Resolve to absolute path
-path.basename('/foo/bar/file.txt');    // Get filename
-path.dirname('/foo/bar/file.txt');     // Get directory
-path.extname('file.txt');              // Get extension
+// Read into buffer
+fs.readSync(fd, buffer, 0, 100, 0);
+
+// Always close!
+fs.closeSync(fd);
 ```
 
-**Study Points:**
-- Platform differences (Windows vs POSIX)
-- Relative vs absolute paths
-- Path normalization
+### Watching Files
+```javascript
+// Watch for changes
+fs.watch('file.txt', (eventType, filename) => {
+  console.log(`${filename} ${eventType}`);
+});
 
-### 3. HTTP/HTTPS
-**Documentation:** https://nodejs.org/api/http.html
+// More reliable (but polls)
+fs.watchFile('file.txt', { interval: 100 }, (curr, prev) => {
+  console.log('Modified:', curr.mtime);
+});
+```
 
-Create HTTP servers and make HTTP requests.
+### Common Pitfalls
+- **Using sync methods in production** - blocks entire event loop
+- **Not closing file descriptors** - causes file descriptor leaks
+- **Race conditions with fs.exists()** - file can be deleted between check and use
+- **Forgetting error handling** - file operations fail often (permissions, missing files)
+- **fs.watch() platform differences** - behavior varies across OS; not 100% reliable
 
-**Key Concepts:**
+### Practice Exercises
+1. Implement recursive directory copy with proper error handling
+2. Build a file-based queue that handles concurrent reads/writes safely
+3. Create a log rotation system that archives files when they reach size limit
+
+**Docs:** https://nodejs.org/api/fs.html
+
+---
+
+## HTTP
+
+**Concept:** Create HTTP servers and clients using event-driven request/response objects.
+
+### HTTP Server
 ```javascript
 const http = require('http');
 
-// Create server
 const server = http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('Hello World\n');
+  // Request object is a readable stream
+  // Response object is a writable stream
+
+  console.log(`${req.method} ${req.url}`);
+  console.log('Headers:', req.headers);
+
+  // Parse URL
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  console.log('Query params:', url.searchParams);
+
+  // Read body
+  let body = '';
+  req.on('data', chunk => body += chunk);
+  req.on('end', () => {
+    console.log('Body:', body);
+
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'X-Custom-Header': 'value'
+    });
+
+    res.end(JSON.stringify({ message: 'Success', data: body }));
+  });
 });
 
 server.listen(3000, () => {
   console.log('Server running on port 3000');
 });
-
-// Make request
-http.get('http://example.com', (res) => {
-  let data = '';
-  res.on('data', (chunk) => data += chunk);
-  res.on('end', () => console.log(data));
-});
 ```
 
-**Study Points:**
-- Request and response objects
-- HTTP methods and status codes
-- Headers and cookies
-- Keep-alive connections
-- HTTP/2 support
-
-### 4. Net (TCP)
-**Documentation:** https://nodejs.org/api/net.html
-
-Create TCP servers and clients.
-
-**Study Points:**
-- Socket programming
-- TCP vs UDP
-- Connection lifecycle
-- Half-open connections
-
-### 5. DNS
-**Documentation:** https://nodejs.org/api/dns.html
-
-DNS lookups and name resolution.
-
-### 6. URL
-**Documentation:** https://nodejs.org/api/url.html
-
-URL parsing and formatting.
-
-**Key Concepts:**
+### HTTP Client
 ```javascript
-const { URL } = require('url');
+const http = require('http');
 
-const myURL = new URL('https://example.com:8080/path?query=value#hash');
-console.log(myURL.hostname);  // example.com
-console.log(myURL.pathname);  // /path
-console.log(myURL.searchParams.get('query')); // value
+const options = {
+  hostname: 'api.example.com',
+  port: 80,
+  path: '/data',
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+  }
+};
+
+const req = http.request(options, (res) => {
+  console.log('Status:', res.statusCode);
+  console.log('Headers:', res.headers);
+
+  let data = '';
+  res.on('data', chunk => data += chunk);
+  res.on('end', () => console.log('Response:', data));
+});
+
+req.on('error', (err) => console.error('Error:', err));
+
+req.write(JSON.stringify({ key: 'value' }));
+req.end();
 ```
+
+### Understanding Request/Response Lifecycle
+1. Client connects → `connection` event
+2. Request headers received → `request` event, callback fired
+3. Request body streams in → `data` events on req
+4. Request complete → `end` event on req
+5. Response sent → `res.writeHead()`, `res.write()`, `res.end()`
+6. Connection may stay alive (keep-alive) or close
+
+### Common Pitfalls
+- **Not consuming request body** - causes memory leaks; always drain or read body
+- **Sending headers after body** - must call `writeHead()` before `write()`/`end()`
+- **Not handling request errors** - unhandled errors crash server
+- **Forgetting Content-Length** - can cause client hangs; Node usually sets it
+- **Assuming req.url is parsed** - it's a string; use `new URL()` to parse
+
+### Practice Exercises
+1. Build a routing system that handles GET/POST to different paths
+2. Implement request timeout - close connection if no data after 30s
+3. Create an HTTP proxy that forwards requests to another server
+
+**Docs:** https://nodejs.org/api/http.html
 
 ---
 
-## System & Environment
+## Child Processes
 
-### 1. OS
-**Documentation:** https://nodejs.org/api/os.html
+**Concept:** Spawn external processes to run system commands or other Node.js scripts.
 
-Operating system-related utility methods.
-
-**Key Functions:**
+### Four Ways to Spawn
 ```javascript
-const os = require('os');
+const { exec, execFile, spawn, fork } = require('child_process');
 
-os.platform();    // Operating system platform
-os.arch();        // CPU architecture
-os.cpus();        // CPU information
-os.totalmem();    // Total memory
-os.freemem();     // Free memory
-os.homedir();     // Home directory
-os.tmpdir();      // Temp directory
-```
-
-### 2. Child Processes
-**Documentation:** https://nodejs.org/api/child_process.html
-
-Spawn child processes to run system commands.
-
-**Key Methods:**
-```javascript
-const { exec, spawn, fork } = require('child_process');
-
-// Execute command
+// 1. exec - runs command in shell, buffers output
 exec('ls -la', (error, stdout, stderr) => {
+  if (error) throw error;
   console.log(stdout);
 });
 
-// Spawn process
+// 2. execFile - runs executable directly (no shell), buffers output
+execFile('ls', ['-la'], (error, stdout, stderr) => {
+  if (error) throw error;
+  console.log(stdout);
+});
+
+// 3. spawn - streams output, doesn't use shell
 const ls = spawn('ls', ['-la']);
 ls.stdout.on('data', (data) => console.log(data.toString()));
+ls.stderr.on('data', (data) => console.error(data.toString()));
+ls.on('close', (code) => console.log(`Exit code: ${code}`));
 
-// Fork Node.js process
+// 4. fork - spawn Node.js process with IPC channel
+const child = fork('./worker.js');
+child.send({ task: 'process', data: [1, 2, 3] });
+child.on('message', (result) => console.log('Result:', result));
+```
+
+### When to Use Which
+- **exec**: Quick shell commands, small output
+- **execFile**: Direct binary execution, more secure
+- **spawn**: Large output, need streaming, long-running
+- **fork**: Node.js child processes with message passing
+
+### IPC with fork()
+```javascript
+// parent.js
 const child = fork('./child.js');
-child.send({ message: 'Hello' });
+child.send({ command: 'compute', data: 100 });
+child.on('message', (msg) => console.log('From child:', msg));
+
+// child.js
+process.on('message', (msg) => {
+  if (msg.command === 'compute') {
+    const result = msg.data * 2;
+    process.send({ result });
+  }
+});
 ```
 
-**Study Points:**
-- exec vs spawn vs fork
-- IPC (Inter-Process Communication)
-- Process management and signals
-- Security considerations
+### Common Pitfalls
+- **Using exec with user input** - command injection vulnerability; use execFile
+- **Not handling child errors** - errors don't propagate; listen to 'error' event
+- **Buffering too much with exec** - use spawn for large output
+- **Forgetting to kill children** - orphaned processes; use `child.kill()`
+- **Blocking on sync versions** - `execSync`, `spawnSync` block event loop
 
-### 3. Cluster
-**Documentation:** https://nodejs.org/api/cluster.html
+### Practice Exercises
+1. Create a worker pool that distributes tasks across multiple forked processes
+2. Build a command runner with timeout - kill process if exceeds time limit
+3. Implement process monitoring - restart child if it crashes
 
-Create child processes that share server ports.
-
-**Study Points:**
-- Multi-core utilization
-- Load balancing strategies
-- Worker process management
-- Zero-downtime restarts
-
-### 4. Worker Threads
-**Documentation:** https://nodejs.org/api/worker_threads.html
-
-Run JavaScript in parallel using threads.
-
-**Study Points:**
-- Threads vs processes
-- SharedArrayBuffer and Atomics
-- Message passing
-- CPU-intensive operations
+**Docs:** https://nodejs.org/api/child_process.html
 
 ---
 
-## Async Programming
+## Event Loop & Async
 
-### 1. Async Hooks
-**Documentation:** https://nodejs.org/api/async_hooks.html
+**Concept:** Node.js runs JavaScript in a single thread using an event loop with multiple phases.
 
-Track asynchronous resources throughout their lifecycle.
-
-**Study Points:**
-- Async context tracking
-- Performance monitoring
-- Resource lifecycle
-
-### 2. Async Context Tracking
-**Documentation:** https://nodejs.org/api/async_context.html
-
-Maintain context across async operations.
-
-### 3. Promises & Timers
-**Documentation:** https://nodejs.org/api/timers.html
-
-**Key Functions:**
-```javascript
-// Timers
-setTimeout(() => console.log('After 1s'), 1000);
-setInterval(() => console.log('Every 1s'), 1000);
-setImmediate(() => console.log('Immediate'));
-
-// Promise-based timers
-const { setTimeout: setTimeoutPromise } = require('timers/promises');
-await setTimeoutPromise(1000);
+### Event Loop Phases
+```
+   ┌───────────────────────────┐
+┌─>│           timers          │  setTimeout, setInterval callbacks
+│  └─────────────┬─────────────┘
+│  ┌─────────────┴─────────────┐
+│  │     pending callbacks     │  I/O callbacks deferred to next loop
+│  └─────────────┬─────────────┘
+│  ┌─────────────┴─────────────┐
+│  │       idle, prepare       │  Internal use only
+│  └─────────────┬─────────────┘
+│  ┌─────────────┴─────────────┐
+│  │           poll            │  Retrieve new I/O events
+│  └─────────────┬─────────────┘
+│  ┌─────────────┴─────────────┐
+│  │           check           │  setImmediate callbacks
+│  └─────────────┬─────────────┘
+│  ┌─────────────┴─────────────┐
+└──┤      close callbacks      │  socket.on('close', ...)
+   └───────────────────────────┘
 ```
 
-**Study Points:**
-- Event loop phases
-- Timer precision and drift
-- `setImmediate()` vs `process.nextTick()` vs `setTimeout(..., 0)`
-
----
-
-## Development & Debugging
-
-### 1. Console
-**Documentation:** https://nodejs.org/api/console.html
-
-Debugging output similar to browser console.
-
-**Key Methods:**
+### Microtasks vs Macrotasks
 ```javascript
-console.log('Info');
-console.error('Error');
-console.warn('Warning');
-console.table([{ a: 1, b: 2 }]);
-console.time('label');
-// ... code ...
-console.timeEnd('label');
-console.trace('Stack trace');
+console.log('1: Sync');
+
+setTimeout(() => console.log('2: setTimeout'), 0);
+
+setImmediate(() => console.log('3: setImmediate'));
+
+Promise.resolve().then(() => console.log('4: Promise'));
+
+process.nextTick(() => console.log('5: nextTick'));
+
+console.log('6: Sync');
+
+// Output:
+// 1: Sync
+// 6: Sync
+// 5: nextTick      <- process.nextTick runs first
+// 4: Promise       <- then microtasks (promises)
+// 2: setTimeout    <- then macrotasks
+// 3: setImmediate
 ```
 
-### 2. Assert
-**Documentation:** https://nodejs.org/api/assert.html
+### Execution Order
+1. Synchronous code
+2. `process.nextTick()` callbacks
+3. Promise microtasks
+4. Timer callbacks (setTimeout/setInterval)
+5. `setImmediate()` callbacks
 
-Assertion testing for unit tests.
-
-**Key Functions:**
+### Async Patterns
 ```javascript
-const assert = require('assert');
-
-assert.strictEqual(actual, expected);
-assert.deepStrictEqual(obj1, obj2);
-assert.throws(() => { throw new Error(); });
-assert.ok(value); // Truthy check
-```
-
-### 3. Test Runner
-**Documentation:** https://nodejs.org/api/test.html
-
-Built-in testing framework (Node.js 18+).
-
-**Key Concepts:**
-```javascript
-const test = require('node:test');
-const assert = require('assert');
-
-test('synchronous test', (t) => {
-  assert.strictEqual(1 + 1, 2);
+// Callback style
+fs.readFile('file.txt', (err, data) => {
+  if (err) throw err;
+  console.log(data);
 });
 
-test('async test', async (t) => {
-  const result = await asyncFunction();
-  assert.strictEqual(result, expected);
-});
+// Promise style
+const fsPromises = require('fs/promises');
+fsPromises.readFile('file.txt')
+  .then(data => console.log(data))
+  .catch(err => console.error(err));
 
-test('subtests', async (t) => {
-  await t.test('subtest 1', (t) => {
-    assert.ok(true);
-  });
-});
+// Async/await style (preferred)
+async function readFile() {
+  try {
+    const data = await fsPromises.readFile('file.txt');
+    console.log(data);
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+// Promisify callback-based functions
+const util = require('util');
+const readFilePromise = util.promisify(fs.readFile);
 ```
 
-### 4. Debugger
-**Documentation:** https://nodejs.org/api/debugger.html
+### Common Pitfalls
+- **Blocking the event loop** - long synchronous operations freeze everything
+- **Uncaught promise rejections** - always use `.catch()` or `try/catch`
+- **process.nextTick() recursion** - can starve I/O; use setImmediate instead
+- **Assuming setTimeout(fn, 0) runs immediately** - runs after current phase completes
+- **Not understanding timer order** - setTimeout vs setImmediate order depends on context
 
-Built-in debugging capabilities.
+### Practice Exercises
+1. Demonstrate blocking vs non-blocking with sync/async file reads and HTTP server
+2. Create a function that returns a Promise and implement proper error handling
+3. Build a task scheduler using setImmediate to avoid blocking event loop
 
-**Commands:**
-```bash
-# Start with debugger
-node inspect app.js
-
-# Debug commands
-cont, c    - Continue execution
-next, n    - Step next
-step, s    - Step in
-out, o     - Step out
-pause      - Pause execution
-```
-
-**Study Points:**
-- Chrome DevTools integration
-- VS Code debugging
-- Breakpoints and watch expressions
-
-### 5. Inspector
-**Documentation:** https://nodejs.org/api/inspector.html
-
-Access to the V8 inspector.
-
-### 6. Performance Hooks
-**Documentation:** https://nodejs.org/api/perf_hooks.html
-
-Measure performance of operations.
-
-**Key Concepts:**
-```javascript
-const { performance, PerformanceObserver } = require('perf_hooks');
-
-// Measure time
-performance.mark('start');
-// ... operation ...
-performance.mark('end');
-performance.measure('My operation', 'start', 'end');
-
-// Observe measurements
-const obs = new PerformanceObserver((items) => {
-  console.log(items.getEntries()[0].duration);
-});
-obs.observe({ entryTypes: ['measure'] });
-```
-
----
-
-## Advanced Topics
-
-### 1. Crypto
-**Documentation:** https://nodejs.org/api/crypto.html
-
-Cryptographic functionality (OpenSSL's hash, HMAC, cipher, decipher, sign, verify).
-
-**Key Concepts:**
-```javascript
-const crypto = require('crypto');
-
-// Hash
-const hash = crypto.createHash('sha256');
-hash.update('data to hash');
-console.log(hash.digest('hex'));
-
-// Random bytes
-crypto.randomBytes(16, (err, buf) => {
-  console.log(buf.toString('hex'));
-});
-
-// Encryption
-const algorithm = 'aes-256-cbc';
-const key = crypto.randomBytes(32);
-const iv = crypto.randomBytes(16);
-const cipher = crypto.createCipheriv(algorithm, key, iv);
-```
-
-**Study Points:**
-- Hashing vs encryption
-- Symmetric vs asymmetric encryption
-- HMAC and digital signatures
-- Secure random number generation
-- Certificate management
-
-### 2. VM
-**Documentation:** https://nodejs.org/api/vm.html
-
-Execute JavaScript in a sandboxed environment.
-
-**Study Points:**
-- V8 contexts
-- Script compilation and execution
-- Security considerations
-
-### 3. C++ Addons
-**Documentation:** https://nodejs.org/api/addons.html
-
-Extend Node.js with C++ code.
-
-**Study Points:**
-- Node-API (N-API)
-- Memory management
-- Async operations in native code
-- Building and distributing addons
-
-### 4. Zlib
-**Documentation:** https://nodejs.org/api/zlib.html
-
-Compression using Gzip and Deflate/Inflate.
-
-**Key Concepts:**
-```javascript
-const zlib = require('zlib');
-const fs = require('fs');
-
-// Compress file
-const gzip = zlib.createGzip();
-const input = fs.createReadStream('input.txt');
-const output = fs.createWriteStream('input.txt.gz');
-input.pipe(gzip).pipe(output);
-```
-
-### 5. REPL
-**Documentation:** https://nodejs.org/api/repl.html
-
-Create custom REPLs for interactive programming.
-
-### 6. SQLite
-**Documentation:** https://nodejs.org/api/sqlite.html
-
-Built-in SQLite database support (experimental).
-
-### 7. WebAssembly
-**Documentation:** https://nodejs.org/api/wasi.html
-
-Run WebAssembly modules in Node.js.
+**Docs:** https://nodejs.org/api/timers.html | https://nodejs.org/api/async_hooks.html
 
 ---
 
 ## Learning Path
 
-### Beginner (Weeks 1-2)
-1. **Process & Globals** - Understand the Node.js runtime
-2. **CommonJS Modules** - Learn module system basics
-3. **File System (fs)** - Read and write files
-4. **Path** - Work with file paths
-5. **Events** - Event-driven programming
-6. **Console & Debugging** - Debug your applications
+### Week 1-2: Fundamentals
+**Focus:** Runtime, modules, basic I/O
+- [ ] Process object and environment
+- [ ] CommonJS vs ES Modules
+- [ ] File system operations (read, write, append)
+- [ ] Path utilities
 
-**Practice Projects:**
-- File reader/writer CLI tool
-- Log file analyzer
-- Simple task manager with file storage
+**Mini-project:** CLI tool that reads files, transforms content, and writes output
 
-### Intermediate (Weeks 3-4)
-1. **HTTP/HTTPS** - Create web servers
-2. **Streams** - Efficient data handling
-3. **Buffer** - Binary data manipulation
-4. **Child Processes** - Execute system commands
-5. **ES Modules** - Modern module syntax
-6. **Error Handling** - Proper error management
-7. **Async/Await** - Promise-based async programming
+### Week 3-4: Event-Driven Programming
+**Focus:** Events, streams, async patterns
+- [ ] EventEmitter pattern
+- [ ] Stream types and piping
+- [ ] Backpressure handling
+- [ ] Promises and async/await
 
-**Practice Projects:**
-- RESTful API server
-- File upload/download service
-- CLI tool that spawns processes
-- Web scraper
+**Mini-project:** Log file processor using streams with custom Transform stream
 
-### Advanced (Weeks 5-8)
-1. **Cluster & Worker Threads** - Scalable applications
-2. **Performance Hooks** - Optimize performance
-3. **Crypto** - Security and encryption
-4. **Test Runner** - Write comprehensive tests
-5. **Async Hooks** - Advanced async patterns
-6. **Net (TCP/UDP)** - Low-level networking
-7. **HTTP/2** - Modern protocols
-8. **VM** - Code execution sandboxing
+### Week 5-6: Networking
+**Focus:** HTTP, networking, real-time
+- [ ] HTTP server and client
+- [ ] Request/response lifecycle
+- [ ] Headers, cookies, routing
+- [ ] TCP sockets (net module)
 
-**Practice Projects:**
-- Load-balanced web server
-- Real-time chat application
-- Encrypted file storage system
-- Custom testing framework
-- Process manager like PM2
+**Mini-project:** RESTful API with routing and JSON responses
 
-### Expert (Ongoing)
-1. **C++ Addons** - Native extensions
-2. **V8 API** - Deep runtime integration
-3. **WebAssembly** - High-performance modules
-4. **Custom Streams** - Advanced stream implementations
-5. **Security** - Best practices and hardening
-6. **Performance Tuning** - Profiling and optimization
+### Week 7-8: Advanced Patterns
+**Focus:** Child processes, performance, debugging
+- [ ] Spawning processes (exec, spawn, fork)
+- [ ] IPC between processes
+- [ ] Event loop deep dive
+- [ ] Performance profiling
+
+**Mini-project:** Task queue system using worker processes
 
 ---
 
-## Best Practices
+## Key Takeaways
 
-### 1. Error Handling
-```javascript
-// Always handle errors
-fs.readFile('file.txt', (err, data) => {
-  if (err) {
-    console.error('Error reading file:', err);
-    return;
-  }
-  // Process data
-});
+**Core Concepts to Master:**
+1. **Everything is async** - understand event loop, promises, callbacks
+2. **Streams are powerful** - use them for large data, memory efficiency
+3. **Error handling is critical** - always handle errors in callbacks, promises, events
+4. **Node is single-threaded** - don't block the event loop
+5. **Modules are cached** - same instance returned on subsequent requires
 
-// Use try-catch with async/await
-async function readFile() {
-  try {
-    const data = await fsPromises.readFile('file.txt');
-    return data;
-  } catch (err) {
-    console.error('Error:', err);
-    throw err; // Or handle appropriately
-  }
-}
+**When Studying:**
+- Always code along - reading isn't enough
+- Break things intentionally - see what errors look like
+- Read Node.js source code for modules you use
+- Profile and measure - don't assume, verify
 
-// Handle unhandled rejections
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection:', reason);
-});
-```
-
-### 2. Async Operations
-```javascript
-// Prefer async/await over callbacks
-// BAD - Callback hell
-fs.readFile('file1.txt', (err, data1) => {
-  fs.readFile('file2.txt', (err, data2) => {
-    fs.writeFile('output.txt', data1 + data2, (err) => {
-      console.log('Done');
-    });
-  });
-});
-
-// GOOD - Async/await
-async function processFiles() {
-  const data1 = await fsPromises.readFile('file1.txt');
-  const data2 = await fsPromises.readFile('file2.txt');
-  await fsPromises.writeFile('output.txt', data1 + data2);
-  console.log('Done');
-}
-```
-
-### 3. Streams for Large Data
-```javascript
-// BAD - Load entire file into memory
-const data = fs.readFileSync('large-file.txt');
-process(data);
-
-// GOOD - Stream the file
-const stream = fs.createReadStream('large-file.txt');
-stream.on('data', (chunk) => process(chunk));
-```
-
-### 4. Environment Variables
-```javascript
-// Use environment variables for configuration
-const PORT = process.env.PORT || 3000;
-const DB_URL = process.env.DATABASE_URL || 'mongodb://localhost:27017';
-
-// Use dotenv for development
-require('dotenv').config();
-```
-
-### 5. Security
-- Validate all user input
-- Use HTTPS in production
-- Keep dependencies updated
-- Use environment variables for secrets
-- Implement rate limiting
-- Sanitize user data before database operations
-- Use helmet for HTTP security headers
-
----
-
-## Resources
-
-### Official Documentation
-- [Node.js API Documentation](https://nodejs.org/api/)
-- [Node.js Guides](https://nodejs.org/en/docs/guides/)
-- [npm Documentation](https://docs.npmjs.com/)
-
-### Learning Resources
-- [Node.js Best Practices](https://github.com/goldbergyoni/nodebestpractices)
-- [You Don't Know Node](https://github.com/azat-co/you-dont-know-node)
-- [Node.js Design Patterns](https://www.nodejsdesignpatterns.com/)
-
-### Tools & Frameworks
-- **Express** - Web application framework
-- **Fastify** - Fast web framework
-- **NestJS** - Progressive Node.js framework
-- **Jest** - Testing framework
-- **ESLint** - Code linting
-- **PM2** - Process manager
-- **nodemon** - Auto-restart during development
-
----
-
-## Contributing to Node.js
-
-Interested in contributing to Node.js core?
-
-1. Read the [Contributing Guide](CONTRIBUTING.md)
-2. Check [Good First Issues](https://github.com/nodejs/node/labels/good%20first%20issue)
-3. Join the [Node.js Slack](https://www.nodeslackers.com/)
-4. Attend [Node.js working group meetings](https://github.com/nodejs/node/tree/main/doc/contributing)
-
----
-
-## Quick Reference
-
-### Common Patterns
-```javascript
-// Module exports
-module.exports = { /* ... */ };
-exports.func = function() { /* ... */ };
-
-// Error-first callbacks
-callback(err, result);
-
-// Event emitter
-emitter.on('event', handler);
-emitter.emit('event', data);
-
-// Streams
-readable.pipe(writable);
-stream.on('data', chunk => {});
-stream.on('end', () => {});
-
-// Promises
-promise.then(result => {}).catch(err => {});
-
-// Async/await
-const result = await asyncFunction();
-```
-
-### Useful Commands
-```bash
-# Version management
-node -v                    # Check Node version
-npm -v                     # Check npm version
-
-# Running scripts
-node script.js             # Run script
-node --inspect script.js   # Debug script
-node --trace-warnings      # Show warning traces
-
-# npm commands
-npm init                   # Initialize package.json
-npm install package        # Install package
-npm install -g package     # Install globally
-npm run script             # Run npm script
-npm test                   # Run tests
-npm audit                  # Check for vulnerabilities
-
-# Environment
-NODE_ENV=production node app.js
-DEBUG=* node app.js        # Enable debug logs
-```
-
----
-
-## Study Tips
-
-1. **Build Real Projects** - Apply concepts in practical applications
-2. **Read the Docs** - Official documentation is comprehensive
-3. **Experiment in REPL** - Test ideas quickly in the Node.js REPL
-4. **Read Source Code** - Learn from popular packages on npm
-5. **Debug Actively** - Use debugger to understand execution flow
-6. **Performance Test** - Benchmark different approaches
-7. **Stay Updated** - Follow Node.js release notes
-8. **Join Community** - Participate in forums and discussions
-
----
-
-**Happy Learning!** 🚀
-
-Remember: Node.js is all about asynchronous, event-driven programming. Master these concepts and you'll master Node.js!
+**Documentation:** https://nodejs.org/api/
